@@ -1,3 +1,5 @@
+import os
+import time
 import pandas as pd
 from bs4 import BeautifulSoup
 import requests
@@ -12,7 +14,7 @@ from tqdm import tqdm
 
 BASE_URL = 'https://www.defense.gov/News/Contracts/?Page={}'
 BASE_LINK = "http://www.defense.gov/News/Contracts/Contract/Article"
-PAGES = 207
+PAGES = 210
 
 
 def parse_title(soup):
@@ -94,11 +96,33 @@ def check_for_correction(words, paragraph, date, corrections):
     River, Maryland, is the contracting activity.'
     
     """
-    for word in words:
+    for word in words[:10]:
         if 'correction' in word.lower() or 'update' in word.lower():
             corrections = pd.concat([corrections, pd.DataFrame({'Date': [date], 'Correction Paragraph': [paragraph]})], ignore_index=True)
-            return corrections, False
-    return corrections, True
+            return corrections, True
+    return corrections, False
+
+def is_company_name(string):
+    # Check if the string contains any capitalized words
+    if not re.search(r'[A-Z]', string):
+        return False
+
+    # Check if the string consists solely of numbers or symbols
+    if re.fullmatch(r'[^A-Za-z]*', string):
+        return False
+
+    return True
+
+def has_six_digits(string):
+    # Remove all commas from the string
+    string = re.sub(r',', '', string)
+
+    # Use a regular expression to search for 6 or more consecutive digit characters
+    match = re.search(r'\d{6,}', string)
+    if match:
+        return True
+    else:
+        return False
 
 def get_company_name(words):
     """
@@ -111,33 +135,50 @@ def get_company_name(words):
     
     Here, the function would return 'Black Construction-Tutor Perini JV. 
     """
-    global corrections
     company_name = ''
     for word in words:
-        if ',' in word:
-            company_name = company_name + word[:-1]
-            for char in [',', '\r', '\n', '\t', '*']:
-                company_name.replace(char, '')
-            break
-        if 'and' in word or ' ' in word:
-            company_name = company_name
-        else:
-            company_name = company_name + word + ' '
+        if not has_six_digits(word):
+            if ',' in word:
+                company_name = company_name + word[:-1]
+                for char in [',', '\r', '\n', '\t', '*']:
+                    company_name.replace(char, '')
+                break # End when this occurs
+            elif 'and' in word or ' ' in word:
+                company_name = company_name
+            else:
+                company_name = company_name + word + ' '
+    
     return company_name
+
+def extract_text_in_parentheses(text):
+  # Use a regular expression to match the text within parentheses
+  match = re.search(r'\(([^)]+)\)', text)
+  # If a match is found, return the text within the parentheses
+  if match:
+    return match.group(1).replace(' ', '')
+  # If no match is found, return an empty string
+  else:
+    return ""
 
 def get_all_companies_info(companies):
     company_names = []
     company_contracts = []
     for company in companies:
-        company_words = company.split(' ')
-        contract = get_contract(company_words)
+        
+        # ignore cases where it is like not just a name...
+        if 'award' in company:
+            company = company.split('award')[0]
+        if len(company) < 110: 
+            company_words = company + ' ' + extract_text_in_parentheses(company)
+            company_words = company_words.split(' ')
+            contract = get_contract(company_words)
 
-        if len(contract) > 1:
-            name = get_company_name(company_words)
-            if name == '':
-                return [''], ['']
-            company_names.append(name)
-            company_contracts.append(contract)
+            if len(contract) > 1:
+                name = get_company_name(company_words)
+                if name == '':
+                    return [''], ['']
+                company_names.append(name)
+                company_contracts.append(contract)
             
     return company_names, company_contracts
 
@@ -164,16 +205,18 @@ def get_contract(words):
     contract_key = ''
     for word in words:
         _check_special_case(word)
-        word = _clean_word(word = word, chars = ['(', ')', '.', ',', ' ', '‐'])
+        word = _clean_word(word = word, chars = ['(', ')', '.', ',', ' ', '‐', '-', '\r', '\n', '\xa0', '\t'])
 
-        if len(word) >= 12 and word.isupper() and '/' not in word:
+        if (len(word) >= 12 or (len(word) == 11 and 'HEVA' in word)) and word.isupper() and '/' not in word:
             contract_key = _format_contract(contract_key=word)
-
+            
+        if len(word) >= 12 and word.isupper() and '/' in word and 'AN/' not in word:
+            contract_key = get_contract(word.split('/'))
 
     return contract_key
 
 def adjust_for_many_companies(amount, company_names):
-    if amount != 'N/A':
+    if amount != 'N/A' and amount != '':
         amount = int(int(amount) / len(company_names))
     return amount
 
@@ -191,17 +234,38 @@ def get_amount(words):
     """
     amount = 'N/A'
     for word, nextword in zip(words, words[1:]):
-        if '$' in word:
+        if '$' in word or '€' in word:
             amount = re.sub("[^0-9]", "", word)
             
             # Sometimes, there is a space between the symbol. This ensures we get the amount
             if amount == '': 
                 amount = re.sub("[^0-9]", "", nextword)
             break
+
+    if amount == 'N/A':
+        # check for the word 'award'
+        for i, word in enumerate(words):
+            if 'award' in word:
+                
+                # now let's check the next three words for numbers. 
+                first = re.sub("[^0-9]", "", words[i + 1])
+                second = re.sub("[^0-9]", "", words[i + 2])
+                try:
+                    third = re.sub("[^0-9]", "", words[i + 3])
+                except IndexError:
+                    third = ''
+                    
+                
+                end_amount = ''
+                for word in [first, second, third]:
+                    if len(word) > len(end_amount):
+                        end_amount = word
+                amount = end_amount
+    
     return amount
 
 
-def get_year(contract_key):
+def get_year(contract_key: str):
     """
     This function looks through the contract_key and grabs the first number after the first 
     '-' character. If the contract_key has been formatted correctly, this should always work. 
@@ -209,21 +273,34 @@ def get_year(contract_key):
     key example: 'N68171-22-D-H009'. Year would be 22 = 2022. 
     """
     
-    year = contract_key.split('-')
+    split_contract_key = contract_key.split('-')
 
     if contract_key == '':
-        year = 'N/A'
+        fiscal_year = 'N/A'
     else:
-        year = year[1]
+        fiscal_year = 'N/A'
+        for row in split_contract_key:
+            if len(row) == 2: 
+                try: 
+                    if 0<int(row)<100:
+                        fiscal_year= row
+                except ValueError:
+                    ... 
 
-    return year
+    return fiscal_year
 
 
 def is_contract_number(word):
+    """
+    """
     for char in ['(', ')', '.', ',', ';']:
         word = word.replace(char, '')
     if len(word) > 12 and word.isupper() and '/' not in word:
-        return True
+        pattern = r"^[A-Z0-9]{6}-\d{2}-\w{1,2}-\w{4}$"
+        regex = re.compile(pattern)
+        match = regex.search(word)
+        if match:
+            return True
     else:
         return False
 
@@ -254,7 +331,15 @@ def parse_out(soup, link, results, corrections):
         ps = content.find_all("p") 
         paragraphs = list(filter(lambda p: len(p.text) > 200, ps))
         relevant_paragraphs = [p.text for p in paragraphs]
-        return relevant_paragraphs
+        
+        end_relevant_paragraphs = []
+        for paragraph in relevant_paragraphs:
+            paragraphs = paragraph.split('\n\n')
+            for p in paragraphs:
+                if len(p) > 200:
+                    end_relevant_paragraphs.append(p)
+        
+        return end_relevant_paragraphs
     
     date = parse_title(soup)        
     relevant_paragraphs = _get_relevant_paragraphs_from_soup(soup)
@@ -263,7 +348,7 @@ def parse_out(soup, link, results, corrections):
         words = paragraph.split(' ')
         corrections, is_correction = check_for_correction(words, paragraph, date, corrections)
         if is_correction:
-                return results, corrections
+            continue
         if check_for_many_companies(words):
             company_names = []
             company_contracts = []
@@ -271,21 +356,22 @@ def parse_out(soup, link, results, corrections):
             companies = get_companies(words)
             company_names, company_contracts = get_all_companies_info(companies)
             if company_names == ['']:
-                return results, corrections
+                continue
 
-            amount = get_amount(words)
-            amount = adjust_for_many_companies(amount, company_names)
+            if len(company_names) > 0 and len(company_contracts) > 0:
+                amount = get_amount(words)
+                amount = adjust_for_many_companies(amount, company_names)
         
-            for i in range(len(company_names)):
-                year = get_year(company_contracts[i])
-                procurment_id = company_contracts[0][:-4] + company_contracts[i][-4:]
-                results = pd.concat([results,pd.DataFrame({'Date': [date], 
-                                         'FY': [year], 
-                                         'Company': [company_names[i]],
-                                         'Dollar Amount': [amount], 
-                                         'ProcurementID': [procurment_id], 
-                                         'Link': [link]})], 
-                                     ignore_index=True)
+                for i in range(len(company_names)):
+                    year = get_year(company_contracts[i])
+                    procurment_id = company_contracts[0][:-4] + company_contracts[i][-4:]
+                    results = pd.concat([results,pd.DataFrame({'Date': [date], 
+                                            'FY': [year], 
+                                            'Company': [company_names[i]],
+                                            'Dollar Amount': [amount], 
+                                            'ProcurementID': [procurment_id], 
+                                            'Link': [link]})], 
+                                        ignore_index=True)
        
        
         else:
@@ -295,7 +381,7 @@ def parse_out(soup, link, results, corrections):
             contract_key = get_contract(words)
             year = get_year(contract_key)
             contract_key = _check_valid_year(year, contract_key)
-
+            
             results = pd.concat([results,pd.DataFrame({'Date': [date], 
                                          'FY': [year], 
                                          'Company': [company_name],
@@ -304,61 +390,28 @@ def parse_out(soup, link, results, corrections):
                                          'Link': [link]})], 
                                      ignore_index=True)
 
-        return results, corrections
+    return results, corrections
 
-def set_up_driver():
-    """
-    Set up the chrome web driver with the settings that we want.
-    """
-    options = Options()
-    options.add_argument('--ignore-certificate-errors')
-    options.add_argument('--incognito')
-    options.add_argument('--headless')
-    
-    return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+
  
-def get_links(page_url):
-    """
-    This function sets up the google headless driver and grabs the soup for a page_url.
-    It returns the list of valid links for searching.  
-    """
-    # Set up Driver
-    driver = set_up_driver()
-    driver.get(page_url)
-    elem = driver.find_element("xpath", "//*")
-    source_code = elem.get_attribute("outerHTML")
-    
-    # Go Through HTML and grab the relevant links
-    soup = BeautifulSoup(source_code, 'html.parser')
-    possible_links = [x.get('href') for x in soup.find_all('a')]
-    filtered_links = []
-    for possible_link in possible_links:
-        if possible_link is not None and BASE_LINK in possible_link:
-            filtered_links.append(possible_link)
-            
-    return filtered_links
-        
-    
+
 def main():
     results = pd.DataFrame(columns=['Date', 'FY', 'Company', 'Dollar Amount', 'ProcurementID', 'Link'])
     corrections = pd.DataFrame(columns=['Date', 'Correction Paragraph'])
-    
-    for i in tqdm(range(PAGES)):
-        page_url = BASE_URL.format(i + 1)
-        print(f"""
-        ****************************************
-        {page_url}
-        ****************************************""", end='\r')
-        
-        links = get_links(page_url)
-        for link in links:
-            r = requests.get(link)
-            soup = BeautifulSoup(r.text, "html.parser")
-            results, corrections = parse_out(soup, link, results, corrections)
 
+    
+    directory = 'page_htmls'
+    for file in tqdm(os.listdir(directory)):
+        if 'html' in file:
+            fp = os.path.join(directory, file)
+            with open(fp) as f:
+                soup = BeautifulSoup(f, "html.parser")
+            
+            link = 'http://www.defense.gov/News/Contracts/Contract/Article/' + file.split('.html')[0] + '/'
+            results, corrections = parse_out(soup, link, results, corrections)
+            
     results.to_csv('webscraped_data.csv', index=False)
     corrections.to_csv('correction.csv', index=False)
-
 
 if __name__ == "__main__":
     main()
