@@ -29,16 +29,7 @@ def parse_title(soup):
     """
     
     title = soup.find("h1", {"class": "maintitle"}).text
-    relevant_strings = list(filter(lambda c: len(c) > 2, title.split(' ')))
-    date = ''
-    for word in relevant_strings:
-        if len(word) >= 2 and word != 'Contracts' and word != 'For':
-            if word.isnumeric() and len(word) > 3:
-                date = date + word
-            else:
-                word = word.replace(',', '')
-                date = date + word + ' '
-
+    date = re.search(r'(\w+\.?\s+\d{1,2},\s+\d{4})', title).group(1)
     date = parser.parse(date)
     date = date.strftime("%Y%m%d")
     return date
@@ -291,9 +282,7 @@ def get_year(contract_key: str):
 
 
 def is_contract_number(word):
-    """
-    """
-    for char in ['(', ')', '.', ',', ';']:
+    for char in ['(', ')', '.', ',', ';', '\t']:
         word = word.replace(char, '')
     if len(word) > 12 and word.isupper() and '/' not in word:
         pattern = r"^[A-Z0-9]{6}-\d{2}-\w{1,2}-\w{4}$"
@@ -337,6 +326,10 @@ def parse_out(soup, link, results, corrections):
             paragraphs = paragraph.split('\n\n')
             for p in paragraphs:
                 if len(p) > 200:
+                    # clean the tabs
+
+                    for char in ['\t', '	', '\n']:
+                        p = p.replace(char, '')
                     end_relevant_paragraphs.append(p)
         
         return end_relevant_paragraphs
@@ -410,7 +403,7 @@ def main():
             link = 'http://www.defense.gov/News/Contracts/Contract/Article/' + file.split('.html')[0] + '/'
             results, corrections = parse_out(soup, link, results, corrections)
             
-    results.to_csv('webscraped_data.csv', index=False)
+    results.to_csv('webscraped_data_no_tab.csv', index=False)
     corrections.to_csv('correction.csv', index=False)
 
 if __name__ == "__main__":
