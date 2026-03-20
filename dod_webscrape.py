@@ -27,11 +27,14 @@ def parse_title(soup):
     and then algorithmically gets the information we need. Additionally, it is supported by 
     the parser.parse function from dateutil in Python.
     """
-    
-    title = soup.find("h1", {"class": "maintitle"}).text
-    date = re.search(r'(\w+\.?\s+\d{1,2},\s+\d{4})', title).group(1)
-    date = parser.parse(date)
-    date = date.strftime("%Y%m%d")
+    try:
+        title = soup.find("h1", {"class": "maintitle"}).text
+        
+        date = re.search(r'(\w+\.?\s+\d{1,2},\s+\d{4})', title).group(1)
+        date = parser.parse(date)
+        date = date.strftime("%Y%m%d")
+    except AttributeError:
+        date = 'N/A'
     return date
 
 
@@ -334,7 +337,12 @@ def parse_out(soup, link, results, corrections):
         
         return end_relevant_paragraphs
     
-    date = parse_title(soup)        
+    date = parse_title(soup)
+
+    # leave if link is empty page.
+    if date == 'N/A':
+        return results, corrections 
+            
     relevant_paragraphs = _get_relevant_paragraphs_from_soup(soup)
     
     for paragraph in relevant_paragraphs:
@@ -397,10 +405,15 @@ def main():
     for file in tqdm(os.listdir(directory)):
         if 'html' in file:
             fp = os.path.join(directory, file)
-            with open(fp) as f:
-                soup = BeautifulSoup(f, "html.parser")
+            # first try utf-8 encoding, if that doesn't work, try cp1252 encoding. (government webside uses diffenrent encodings in different files)
+            try:
+                with open(fp, encoding="utf-8") as f:
+                    soup = BeautifulSoup(f, "html.parser")
+            except UnicodeDecodeError:
+                with open(fp, encoding="cp1252") as f:
+                    soup = BeautifulSoup(f, "html.parser")
             
-            link = 'http://www.defense.gov/News/Contracts/Contract/Article/' + file.split('.html')[0] + '/'
+            link = 'http://www.war.gov/News/Contracts/Contract/Article/' + file.split('.html')[0] + '/'
             results, corrections = parse_out(soup, link, results, corrections)
             
     results.to_csv('webscraped_data_no_tab.csv', index=False)

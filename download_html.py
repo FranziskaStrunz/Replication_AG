@@ -8,9 +8,13 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from tqdm import tqdm
 
-BASE_URL = 'https://www.defense.gov/News/Contracts/?Page={}'
-BASE_LINK = "http://www.defense.gov/News/Contracts/Contract/Article"
-PAGES = 211
+BASE_URL = 'https://www.war.gov/News/Contracts/?Page={}'
+BASE_LINK = "https://www.war.gov/News/Contracts/Contract/Article"
+PAGES = 289
+
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+}
 
 def set_up_driver():
     """
@@ -19,7 +23,7 @@ def set_up_driver():
     options = Options()
     options.add_argument('--ignore-certificate-errors')
     options.add_argument('--incognito')
-    options.add_argument('--headless')
+    #options.add_argument('--headless')
     
     return webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
 
@@ -45,17 +49,22 @@ def get_links(page_url: str):
     return filtered_links
 
 def get_html_save_path(link: str):
+    article_id = link.split('/Article/')[1].split('/')[0]
+    return f'page_htmls/{article_id}.html'
     """
     Takes in a link name and grabs only the information we need for 
     saving it later into some html file. 
     
-    e.g. 'http://www.defense.gov/News/Contracts/Contract/Article/3251958/'
+    e.g. 'http://www.war.gov/News/Contracts/Contract/Article/3251958/'
     turns into '3251958.html'
     """
     
     return 'page_htmls/' + ''.join(link.split('/')[-2:]) + '.html'
     
 def main():
+    # Ensure output directory exists
+    if not os.path.exists('page_htmls'):
+        os.makedirs('page_htmls')
     
     # Iterate through the pages and get all of the repsective links
     for i in tqdm(range(PAGES), position=0, leave=True):
@@ -64,24 +73,23 @@ def main():
         
         
         links = get_links(page_url)
-        
+    
         for link in links:
             save_path = get_html_save_path(link)            
             if not os.path.exists(save_path):
                 try: 
-                    r = requests.get(link)           
-                except:
-                    print("[INFO] We got a weird error. Sleeping for 30 seconds")
+                    r = requests.get(link, headers=headers )           
+                except Exception as e:
+                    print(f"[INFO] We got a weird error: {e}. Sleeping for 30 seconds")
                     time.sleep(30)
-                    r = requests.get(link)
+                    r = requests.get(link, headers=headers )
                         
         
                 
-                with open(save_path, "w") as f:
+                with open(save_path, "w", encoding = "utf-8") as f:
                     f.write(r.text)
             else:
                 print(f"[INFO] Already Downloaded and Saved: {save_path}")
-
-
+        
 if __name__ == "__main__":
     main()
